@@ -1,0 +1,31 @@
+# --- Ego4D dataset access ---
+# Ego4D's own hosting is AWS S3 (separate credentials from Nectar, issued
+# after your license agreement is approved). The ego4d pip package pulls
+# boto3 in as a dependency automatically.
+ego4d
+
+# --- Nectar object storage (Swift, not S3) ---
+python-swiftclient
+python-keystoneclient
+
+# --- Audio feature extraction ---
+librosa
+soundfile
+numpy
+scipy
+
+# --- Video segmenting ---
+ffmpeg-python
+
+# --- Dimensionality reduction ---
+scikit-learn
+umap-learn
+
+# --- Database ---
+psycopg2-binary
+sqlalchemy
+
+# --- Config / utilities ---
+python-dotenv
+tqdm
+pandas

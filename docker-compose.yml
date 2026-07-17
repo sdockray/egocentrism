@@ -1,0 +1,41 @@
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-egocentrism}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-egocentrism}
+      POSTGRES_DB: ${POSTGRES_DB:-egocentrism}
+    volumes:
+      # Named volume = Docker-managed storage on this instance's disk.
+      # Fine for prototyping. Once the schema stabilises, dump this and
+      # restore into a managed Nectar Trove instance for durability.
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432" # bound to localhost only, not the public IP
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-egocentrism}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-egocentrism}:${POSTGRES_PASSWORD:-egocentrism}@db:5432/${POSTGRES_DB:-egocentrism}
+    volumes:
+      - ./src:/app/src
+      # Mount your attached Nectar volume here (see README) so downloaded
+      # video/scratch data lands on the big persistent disk, not the
+      # instance's small root disk.
+      - /mnt/data-volume:/data/scratch
+    stdin_open: true
+    tty: true
+
+volumes:
+  pgdata:
