@@ -75,14 +75,54 @@ docker compose run --rm app
 
 ## Nectar instance setup (outside this repo)
 
-1. Dashboard → Compute → Instances → Launch. Start with something like
-   `m3.medium` for the dev box; you don't need GPU/huge-RAM flavors for
-   this instance.
-2. Dashboard → Volumes → Create Volume, attach it, then on the instance:
-   `mkfs.ext4` + mount it at (e.g.) `/mnt/data-volume` — this is what
-   `docker-compose.yml`'s `app` volume mount expects.
-3. Install Docker + Docker Compose on the instance, `git clone` this repo,
-   follow "One-time setup" above.
-4. Remember to stop instances you're not using — the Service Unit budget
+1. Dashboard → Compute → Key Pairs → Create Key Pair, save the `.pem`
+   somewhere like `~/.ssh/nectar.pem` and `chmod 600` it.
+2. Dashboard → Compute → Instances → Launch. Start with something like
+   `m3.medium` for the dev box — you don't need GPU/huge-RAM flavors for
+   this instance. Select the key pair from step 1. Under
+   "Configuration", paste the contents of `cloud-init.yaml` into the
+   Customisation Script / User Data field — this installs Docker +
+   Compose automatically at boot, so the instance is ready to use as
+   soon as it's up (check with `docker --version` over SSH).
+3. Dashboard → Network → Floating IPs → Allocate, then Associate it with
+   the instance. Dashboard → Network → Security Groups → make sure port
+   22 (SSH) is allowed inbound. Do **not** open port 8888 — Jupyter is
+   reached via SSH tunnel (see below), not directly over the internet.
+4. Dashboard → Network → Security Groups, add a Rule to the default security group
+   to allow SSH incoming connections.
+5. Dashboard → Volumes → Create Volume, attach it to the instance, then
+   on the instance: `mkfs.ext4` + mount it at (e.g.) `/dev/vdb`
+   — this is what `docker-compose.yml`'s volume mounts expect.
+6. `git clone` this repo onto the instance, follow "One-time setup" above.
+7. Remember to stop instances you're not using — the Service Unit budget
    is consumed by wall-clock runtime, not just by having resources
    allocated.
+
+## Notebooks (without rebuilding anything)
+
+The `notebook` service in `docker-compose.yml` runs JupyterLab in the
+*same* image as `app` — same deps, same `src/` code (live-mounted, so
+edits in Jupyter or your editor show up in both), same `.env` and
+database access. Nothing needs rebuilding to switch between "run the
+pipeline" and "poke at it in a notebook."
+
+On the instance:
+```bash
+docker compose up -d notebook
+docker compose logs notebook   # copy the token from the printed URL
+```
+
+On your laptop, open an SSH tunnel (leave this running):
+```bash
+ssh -i ~/.ssh/nectar.pem -L 8888:localhost:8888 ubuntu@<floating-ip>
+```
+
+Then open `http://localhost:8888` in your browser and paste the token.
+Notebooks you save land in `./notebooks` on the instance (and are
+git-trackable — commit the ones worth keeping, the rest is scratch).
+
+Import your own modules directly, since `src/` is on the path inside the
+container:
+```python
+from src import storage, db
+```
