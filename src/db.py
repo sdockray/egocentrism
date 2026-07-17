@@ -24,7 +24,9 @@ def get_conn():
 def current_git_commit() -> str | None:
     try:
         return subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], cwd=os.path.dirname(__file__)
+            ["git", "rev-parse", "HEAD"],
+            cwd=os.path.dirname(__file__),
+            stderr=subprocess.DEVNULL
         ).decode().strip()
     except Exception:
         return None

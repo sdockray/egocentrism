@@ -30,6 +30,7 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-egocentrism}:${POSTGRES_PASSWORD:-egocentrism}@db:5432/${POSTGRES_DB:-egocentrism}
     volumes:
       - ./src:/app/src
+      - ./.git:/app/.git:ro
       # Mount your attached Nectar volume here (see README) so downloaded
       # video/scratch data lands on the big persistent disk, not the
       # instance's small root disk.
@@ -48,6 +49,7 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-egocentrism}:${POSTGRES_PASSWORD:-egocentrism}@db:5432/${POSTGRES_DB:-egocentrism}
     volumes:
       - ./src:/app/src
+      - ./.git:/app/.git:ro
       - ./notebooks:/app/notebooks
       - /mnt/data-volume:/data/scratch
     ports:
