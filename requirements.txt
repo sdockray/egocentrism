@@ -25,6 +25,10 @@ umap-learn
 psycopg2-binary
 sqlalchemy
 
+# --- Interactive dev ---
+jupyterlab
+ipykernel
+
 # --- Config / utilities ---
 python-dotenv
 tqdm

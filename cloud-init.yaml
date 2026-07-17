@@ -1,0 +1,39 @@
+#cloud-config
+# Paste this into Nectar Dashboard -> Launch Instance -> Configuration ->
+# "Customisation Script" (User Data), or pass via:
+#   openstack server create ... --user-data cloud-init.yaml
+#
+# It installs Docker + Compose so the instance is ready to `git clone` and
+# `docker compose up` immediately after boot, without manual setup.
+
+package_update: true
+package_upgrade: true
+
+packages:
+  - ca-certificates
+  - curl
+  - gnupg
+  - git
+
+runcmd:
+  # --- Docker's official repo (more reliable than Ubuntu's docker.io,
+  # which lags behind and doesn't bundle the compose plugin) ---
+  - install -m 0755 -d /etc/apt/keyrings
+  - curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+  - chmod a+r /etc/apt/keyrings/docker.asc
+  - >
+    echo "deb [arch=$(dpkg --print-architecture)
+    signed-by=/etc/apt/keyrings/docker.asc]
+    https://download.docker.com/linux/ubuntu
+    $(. /etc/os-release && echo $VERSION_CODENAME) stable" |
+    tee /etc/apt/sources.list.d/docker.list > /dev/null
+  - apt-get update
+  - apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+  # --- let the default user run docker without sudo ---
+  - usermod -aG docker ubuntu
+
+  - systemctl enable docker
+  - systemctl start docker
+
+final_message: "Instance ready after $UPTIME seconds. Docker $(docker --version) installed."

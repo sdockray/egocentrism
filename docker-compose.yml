@@ -37,5 +37,26 @@ services:
     stdin_open: true
     tty: true
 
+  notebook:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-egocentrism}:${POSTGRES_PASSWORD:-egocentrism}@db:5432/${POSTGRES_DB:-egocentrism}
+    volumes:
+      - ./src:/app/src
+      - ./notebooks:/app/notebooks
+      - /mnt/data-volume:/data/scratch
+    ports:
+      # bound to localhost only — reach it via an SSH tunnel (see README),
+      # never expose 8888 directly on the instance's public floating IP
+      - "127.0.0.1:8888:8888"
+    command: >
+      jupyter lab --ip=0.0.0.0 --port=8888 --no-browser
+      --ServerApp.root_dir=/app --ServerApp.notebook_dir=/app
+
 volumes:
   pgdata:
