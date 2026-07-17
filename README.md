@@ -91,8 +91,14 @@ docker compose run --rm app
 4. Dashboard → Network → Security Groups, add a Rule to the default security group
    to allow SSH incoming connections.
 5. Dashboard → Volumes → Create Volume, attach it to the instance, then
-   on the instance: `mkfs.ext4` + mount it at (e.g.) `/dev/vdb`
-   — this is what `docker-compose.yml`'s volume mounts expect.
+   on the instance, format the volume and mount it to a directory:
+   ```bash
+   sudo mkfs.ext4 /dev/vdb
+   sudo mkdir -p /mnt/data-volume
+   sudo mount /dev/vdb /mnt/data-volume
+   sudo chown -R ubuntu:ubuntu /mnt/data-volume
+   ```
+   This directory (`/mnt/data-volume`) is what `docker-compose.yml`'s volume mounts expect.
 6. `git clone` this repo onto the instance, follow "One-time setup" above.
 7. Remember to stop instances you're not using — the Service Unit budget
    is consumed by wall-clock runtime, not just by having resources
