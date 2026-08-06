@@ -36,6 +36,18 @@ running on the ARDC Nectar Research Cloud.
    storage (~2.5TB total). Ego4D's full primary dataset is ~7.1TB. Start
    with a narrow subset (see `src/pipeline/download.py`) — don't run
    `--datasets full_scale` unscoped.
+4. Download the Ego4D metadata JSON before running the Sonic export flow:
+   ```bash
+   docker compose run --rm app ego4d --aws_profile_name=ego4d --metadata -o ./2026/
+   ```
+   This should create `2026/ego4d.json`, which `src/sonic/dataset.py`
+   expects when it builds the fake shop video list.
+   The AWS profile is mounted automatically from `${HOME}/.aws` into
+   `/root/.aws` for both `app` and `notebook` via `docker-compose.yml`.
+   The `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` values in `.env`
+   are still available inside the container for AWS SDK code that uses
+   environment-based credentials, but the Ego4D CLI profile lookup uses
+   the mounted `~/.aws` files.
 
 ### 2. Nectar object storage credentials
 1. Nectar Dashboard → Identity → Application Credentials → Create.
@@ -56,9 +68,11 @@ docker compose exec -T db psql -U egocentrism -d egocentrism < schema.sql
 
 ### 4. Smoke test
 ```bash
-docker compose run --rm app
-# should print "Started run <uuid>. Wire up download/segment/features/reduce steps here."
+docker compose build --no-cache app
+docker compose run --rm app python -m src.sonic.export_map_data --all
 ```
+
+If you have only changed files under `src/`, the image rebuild is optional because those files are live-mounted into the container. If you change the Dockerfile or `requirements.txt`, rebuild first so the image picks up the new dependencies.
 
 ## Day to day
 
