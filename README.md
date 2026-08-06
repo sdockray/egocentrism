@@ -82,11 +82,11 @@ docker compose exec -T db psql -U egocentrism -d egocentrism < schema.sql
 
 ### 4. Smoke test
 ```bash
-docker compose build --no-cache app
+docker compose build app
 docker compose run --rm app python -m src.sonic.export_map_data --all
 ```
 
-If you have only changed files under `src/`, the image rebuild is optional because those files are live-mounted into the container. If you change the Dockerfile or `requirements.txt`, rebuild first so the image picks up the new dependencies.
+If you have only changed files under `src/`, the image rebuild is optional because those files are live-mounted into the container. If you change the Dockerfile or `requirements.txt`, rebuild first so the image picks up the new dependencies. Use `--no-cache` only when you intentionally need a full rebuild; it will force Whisper and its model download to run again and consumes much more disk on the instance.
 
 ## Day to day
 

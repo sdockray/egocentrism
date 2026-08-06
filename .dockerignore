@@ -1,0 +1,9 @@
+.git
+.DS_Store
+.env
+__pycache__/
+*.pyc
+
+# Runtime-mounted data; do not send large local artifacts into build context.
+2026/
+notebooks/
