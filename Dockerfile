@@ -12,6 +12,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     && rm -rf /var/lib/apt/lists/*
 
+# Build whisper.cpp for fast C++ ASR inference
+RUN git clone https://github.com/ggerganov/whisper.cpp.git /app/whisper.cpp && \
+    cd /app/whisper.cpp && \
+    make -j4 && \
+    ./models/download-ggml-model.sh medium.en
+
 WORKDIR /app
 
 COPY requirements.txt .
