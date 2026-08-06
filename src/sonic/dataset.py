@@ -7,47 +7,17 @@ in the Facebook Reality Labs (FRL) Fake Shop environment ('Grocery shopping indo
 
 import json
 import os
-import sys
 from pathlib import Path
 from typing import Dict, List, Optional
 
 # Root directory of workspace
 WORKSPACE_ROOT = Path(__file__).resolve().parents[2]
 EGO4D_JSON_PATH = WORKSPACE_ROOT / "2026" / "ego4d.json"
-EGO4D_CATALOG_PATH = WORKSPACE_ROOT / "2026" / "fake_shop_videos.json"
-VIDEO_DIR = Path(os.getenv("SCRATCH_DIR", "/mnt/data-volume")) / "v2" / "video_540ss"
+# Primary location for Ego4D assets in this project.
+VIDEO_DIR = WORKSPACE_ROOT / "2026" / "v2" / "video_540ss"
+# Backward-compatible fallback for older runs that downloaded to SCRATCH_DIR.
+LEGACY_VIDEO_DIR = Path(os.getenv("SCRATCH_DIR", "/mnt/data-volume")) / "v2" / "video_540ss"
 TARGET_ANCHOR_UID = "0049fdd8-0044-4ef5-9c34-b3469416ebe5"
-
-
-def _build_fake_shop_catalog(all_videos: List[Dict]) -> List[Dict]:
-    """Extract the small subset of metadata this Sonic pipeline actually needs."""
-    catalog = []
-
-    for video in all_videos:
-        if video.get("video_source") != "frl_track_1_public":
-            continue
-
-        scenarios = video.get("scenarios") or []
-        if "Grocery shopping indoors" not in scenarios:
-            continue
-
-        catalog.append(
-            {
-                "video_uid": video.get("video_uid"),
-                "video_source": video.get("video_source"),
-                "scenarios": scenarios,
-                "duration_sec": video.get("duration_sec", 0),
-                "fb_participant_id": video.get("fb_participant_id"),
-            }
-        )
-
-    return catalog
-
-
-def _write_fake_shop_catalog(videos: List[Dict]) -> None:
-    EGO4D_CATALOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(EGO4D_CATALOG_PATH, "w", encoding="utf-8") as f:
-        json.dump({"videos": videos}, f)
 
 
 def _read_videos_payload(path: Path) -> List[Dict]:
@@ -62,20 +32,11 @@ def _read_videos_payload(path: Path) -> List[Dict]:
 
 
 def load_ego4d_metadata() -> List[Dict]:
-    """Loads a compact fake-shop metadata catalog, deriving it if needed."""
-    if EGO4D_CATALOG_PATH.exists():
-        return _read_videos_payload(EGO4D_CATALOG_PATH)
-
+    """Loads full Ego4D metadata from 2026/ego4d.json."""
     if not EGO4D_JSON_PATH.exists():
-        raise FileNotFoundError(
-            "No Sonic metadata catalog found. Expected either "
-            f"{EGO4D_CATALOG_PATH} or the full Ego4D metadata at {EGO4D_JSON_PATH}"
-        )
+        raise FileNotFoundError(f"Master metadata JSON not found at {EGO4D_JSON_PATH}")
 
-    all_videos = _read_videos_payload(EGO4D_JSON_PATH)
-    catalog = _build_fake_shop_catalog(all_videos)
-    _write_fake_shop_catalog(catalog)
-    return catalog
+    return _read_videos_payload(EGO4D_JSON_PATH)
 
 
 def get_fake_shop_videos(limit: Optional[int] = None) -> List[Dict]:
@@ -112,9 +73,10 @@ def get_fake_shop_videos(limit: Optional[int] = None) -> List[Dict]:
 
 def get_video_file_path(video_uid: str) -> Optional[Path]:
     """Returns local Path to video MP4 if present, else None."""
-    expected_path = VIDEO_DIR / f"{video_uid}.mp4"
-    if expected_path.exists() and expected_path.stat().st_size > 0:
-        return expected_path
+    for base_dir in (VIDEO_DIR, LEGACY_VIDEO_DIR):
+        expected_path = base_dir / f"{video_uid}.mp4"
+        if expected_path.exists() and expected_path.stat().st_size > 0:
+            return expected_path
     return None
 
 
