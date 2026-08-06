@@ -55,20 +55,34 @@ def _ensure_whisper_model(model_path: Path, whisper_dir: Path) -> Path:
 def _build_whisper_runtime_env(whisper_dir: Path) -> Dict[str, str]:
     """Build runtime env so whisper-cli can locate its shared libraries."""
     env = os.environ.copy()
-    lib_candidates = [
+    lib_paths = set()
+    build_dir = whisper_dir / "build"
+
+    # Find actual runtime library locations instead of assuming a fixed layout.
+    if build_dir.exists():
+        for pattern in ("libwhisper.so*", "libggml*.so*"):
+            for lib_file in build_dir.rglob(pattern):
+                if lib_file.is_file():
+                    lib_paths.add(str(lib_file.parent))
+
+    # Backward-compatible fallback paths for older whisper.cpp layouts.
+    legacy_candidates = [
         whisper_dir / "build" / "src",
         whisper_dir / "build" / "ggml" / "src",
         whisper_dir / "build" / "ggml" / "src" / "ggml-blas",
         whisper_dir / "build" / "ggml" / "src" / "ggml-cpu",
         whisper_dir / "build" / "ggml" / "src" / "ggml-cuda",
     ]
+    for path in legacy_candidates:
+        if path.exists():
+            lib_paths.add(str(path))
 
-    lib_paths = [str(p) for p in lib_candidates if p.exists()]
     if not lib_paths:
         return env
 
     existing = env.get("LD_LIBRARY_PATH", "")
-    env["LD_LIBRARY_PATH"] = ":".join(lib_paths + ([existing] if existing else []))
+    resolved_paths = sorted(lib_paths)
+    env["LD_LIBRARY_PATH"] = ":".join(resolved_paths + ([existing] if existing else []))
     return env
 
 
