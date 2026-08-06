@@ -38,16 +38,30 @@ running on the ARDC Nectar Research Cloud.
    `--datasets full_scale` unscoped.
 4. Download the Ego4D metadata JSON before running the Sonic export flow:
    ```bash
+   mkdir -p ./2026
    docker compose run --rm app ego4d --aws_profile_name=ego4d --metadata -o ./2026/
    ```
    This should create `2026/ego4d.json`, which `src/sonic/dataset.py`
    expects when it builds the fake shop video list.
    The AWS profile is mounted automatically from `${HOME}/.aws` into
    `/root/.aws` for both `app` and `notebook` via `docker-compose.yml`.
+   The `2026/` directory is also bind-mounted into the containers, so the
+   downloaded metadata stays available for later runs of the app.
    The `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` values in `.env`
    are still available inside the container for AWS SDK code that uses
    environment-based credentials, but the Ego4D CLI profile lookup uses
-   the mounted `~/.aws` files.
+   the mounted `~/.aws` files. Make sure the instance has a named profile
+   called `ego4d` in `/home/ubuntu/.aws/credentials` and
+   `/home/ubuntu/.aws/config` before running this.
+   Do **not** use `sudo aws configure` here: it writes to `/root/.aws`,
+   which is not what the container mounts. If you hit a permissions error,
+   fix the host directory first and then run the command as `ubuntu`:
+   ```bash
+   sudo chown -R ubuntu:ubuntu ~/.aws
+   chmod 700 ~/.aws
+   chmod 600 ~/.aws/credentials ~/.aws/config
+   aws configure --profile ego4d
+   ```
 
 ### 2. Nectar object storage credentials
 1. Nectar Dashboard → Identity → Application Credentials → Create.

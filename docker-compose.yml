@@ -31,6 +31,7 @@ services:
     volumes:
       - ./src:/app/src
       - ./.git:/app/.git:ro
+      - ./2026:/app/2026
       - ${HOME}/.aws:/root/.aws:ro
       # Mount your attached Nectar volume here (see README) so downloaded
       # video/scratch data lands on the big persistent disk, not the
@@ -51,6 +52,7 @@ services:
     volumes:
       - ./src:/app/src
       - ./.git:/app/.git:ro
+      - ./2026:/app/2026
       - ${HOME}/.aws:/root/.aws:ro
       - ./notebooks:/app/notebooks
       - /mnt/data-volume:/data/scratch
