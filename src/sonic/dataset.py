@@ -14,17 +14,68 @@ from typing import Dict, List, Optional
 # Root directory of workspace
 WORKSPACE_ROOT = Path(__file__).resolve().parents[2]
 EGO4D_JSON_PATH = WORKSPACE_ROOT / "2026" / "ego4d.json"
+EGO4D_CATALOG_PATH = WORKSPACE_ROOT / "2026" / "fake_shop_videos.json"
 VIDEO_DIR = Path(os.getenv("SCRATCH_DIR", "/mnt/data-volume")) / "v2" / "video_540ss"
 TARGET_ANCHOR_UID = "0049fdd8-0044-4ef5-9c34-b3469416ebe5"
 
 
-def load_ego4d_metadata() -> List[Dict]:
-    """Loads master video metadata from 2026/ego4d.json."""
-    if not EGO4D_JSON_PATH.exists():
-        raise FileNotFoundError(f"Master metadata JSON not found at {EGO4D_JSON_PATH}")
-    with open(EGO4D_JSON_PATH, "r") as f:
+def _build_fake_shop_catalog(all_videos: List[Dict]) -> List[Dict]:
+    """Extract the small subset of metadata this Sonic pipeline actually needs."""
+    catalog = []
+
+    for video in all_videos:
+        if video.get("video_source") != "frl_track_1_public":
+            continue
+
+        scenarios = video.get("scenarios") or []
+        if "Grocery shopping indoors" not in scenarios:
+            continue
+
+        catalog.append(
+            {
+                "video_uid": video.get("video_uid"),
+                "video_source": video.get("video_source"),
+                "scenarios": scenarios,
+                "duration_sec": video.get("duration_sec", 0),
+                "fb_participant_id": video.get("fb_participant_id"),
+            }
+        )
+
+    return catalog
+
+
+def _write_fake_shop_catalog(videos: List[Dict]) -> None:
+    EGO4D_CATALOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(EGO4D_CATALOG_PATH, "w", encoding="utf-8") as f:
+        json.dump({"videos": videos}, f)
+
+
+def _read_videos_payload(path: Path) -> List[Dict]:
+    with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
-    return data.get("videos", [])
+
+    if isinstance(data, dict):
+        return data.get("videos", [])
+    if isinstance(data, list):
+        return data
+    raise ValueError(f"Unexpected metadata format in {path}")
+
+
+def load_ego4d_metadata() -> List[Dict]:
+    """Loads a compact fake-shop metadata catalog, deriving it if needed."""
+    if EGO4D_CATALOG_PATH.exists():
+        return _read_videos_payload(EGO4D_CATALOG_PATH)
+
+    if not EGO4D_JSON_PATH.exists():
+        raise FileNotFoundError(
+            "No Sonic metadata catalog found. Expected either "
+            f"{EGO4D_CATALOG_PATH} or the full Ego4D metadata at {EGO4D_JSON_PATH}"
+        )
+
+    all_videos = _read_videos_payload(EGO4D_JSON_PATH)
+    catalog = _build_fake_shop_catalog(all_videos)
+    _write_fake_shop_catalog(catalog)
+    return catalog
 
 
 def get_fake_shop_videos(limit: Optional[int] = None) -> List[Dict]:
@@ -40,15 +91,12 @@ def get_fake_shop_videos(limit: Optional[int] = None) -> List[Dict]:
     anchor_video = None
 
     for v in all_videos:
-        source = v.get("video_source")
-        scenarios = v.get("scenarios") or []
         uid = v.get("video_uid")
 
-        if source == "frl_track_1_public" and "Grocery shopping indoors" in scenarios:
-            if uid == TARGET_ANCHOR_UID:
-                anchor_video = v
-            else:
-                fake_shop_videos.append(v)
+        if uid == TARGET_ANCHOR_UID:
+            anchor_video = v
+        else:
+            fake_shop_videos.append(v)
 
     selected = []
     if anchor_video:

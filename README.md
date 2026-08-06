@@ -38,15 +38,15 @@ running on the ARDC Nectar Research Cloud.
    `--datasets full_scale` unscoped.
 4. Download the Ego4D metadata JSON before running the Sonic export flow:
    ```bash
-   mkdir -p ./2026
-   docker compose run --rm app ego4d --aws_profile_name=ego4d --metadata -o ./2026/
+   mkdir -p /mnt/data-volume/2026
+   docker compose run --rm app ego4d --aws_profile_name=ego4d --metadata -o /app/2026/
    ```
-   This should create `2026/ego4d.json`, which `src/sonic/dataset.py`
-   expects when it builds the fake shop video list.
+   This creates the full `2026/ego4d.json` metadata dump.
    The AWS profile is mounted automatically from `${HOME}/.aws` into
    `/root/.aws` for both `app` and `notebook` via `docker-compose.yml`.
-   The `2026/` directory is also bind-mounted into the containers, so the
-   downloaded metadata stays available for later runs of the app.
+   The `2026/` directory is bind-mounted from `/mnt/data-volume/2026`, so the
+   downloaded metadata stays available for later runs of the app without
+   consuming space in the repo checkout or Docker build context.
    The `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` values in `.env`
    are still available inside the container for AWS SDK code that uses
    environment-based credentials, but the Ego4D CLI profile lookup uses
@@ -100,6 +100,8 @@ If you have only changed files under `src/`, the image rebuild is optional becau
   never local disk beyond `$SCRATCH_DIR` (mounted from the Nectar volume,
   see `docker-compose.yml` — update that mount path to match whatever
   volume you attach to the instance).
+- Keep the full Ego4D metadata under `/mnt/data-volume/2026` on the instance.
+   It is mounted into the containers at `/app/2026`.
 
 ## Nectar instance setup (outside this repo)
 
