@@ -25,7 +25,13 @@ from src.sonic.annotations import load_narrations_for_video, align_narrations_wi
 from src.sonic.reduction import reduce_mfccs_to_2d
 
 
-def build_fake_shop_map_dataset(limit: int = 4, window_sec: float = 2.0, hop_sec: float = 1.0) -> Dict:
+def build_fake_shop_map_dataset(
+    limit: int = 4,
+    window_sec: float = 2.0,
+    hop_sec: float = 1.0,
+    asr_threads: int = 4,
+    skip_asr: bool = False,
+) -> Dict:
     """
     Builds the unified dataset for the Giant MFCC Map.
     Auto-downloads any missing target videos using the ego4d CLI.
@@ -54,9 +60,15 @@ def build_fake_shop_map_dataset(limit: int = 4, window_sec: float = 2.0, hop_sec
 
         # 2. ASR Speech Transcription
         try:
-            asr_transcripts = run_whisper_asr(wav_path)
-            segments = align_asr_with_segments(segments, asr_transcripts)
-            print(f" -> Aligned {len(asr_transcripts)} ASR speech phrases")
+            if skip_asr:
+                asr_transcripts = []
+                for seg in segments:
+                    seg["asr_text"] = ""
+                print(" -> Skipped ASR (requested)")
+            else:
+                asr_transcripts = run_whisper_asr(wav_path, threads=asr_threads)
+                segments = align_asr_with_segments(segments, asr_transcripts)
+                print(f" -> Aligned {len(asr_transcripts)} ASR speech phrases")
         except Exception as e:
             print(f" -> Warning: ASR failed for {uid}: {e}", file=sys.stderr)
             for seg in segments:
@@ -112,8 +124,16 @@ if __name__ == "__main__":
     parser.add_argument("--window", type=float, default=3.0, help="Audio sliding window duration in seconds (default: 3.0)")
     parser.add_argument("--hop", type=float, default=2.0, help="Audio window hop duration in seconds (default: 2.0)")
     parser.add_argument("--all", action="store_true", help="Process all available fake shop videos in 2026/ego4d.json")
+    parser.add_argument("--asr-threads", type=int, default=4, help="Threads for whisper.cpp ASR (default: 4)")
+    parser.add_argument("--skip-asr", action="store_true", help="Skip ASR for speed; narration alignment still runs")
 
     args = parser.parse_args()
     target_limit = None if args.all or args.limit <= 0 else args.limit
 
-    build_fake_shop_map_dataset(limit=target_limit, window_sec=args.window, hop_sec=args.hop)
+    build_fake_shop_map_dataset(
+        limit=target_limit,
+        window_sec=args.window,
+        hop_sec=args.hop,
+        asr_threads=args.asr_threads,
+        skip_asr=args.skip_asr,
+    )

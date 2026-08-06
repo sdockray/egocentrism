@@ -86,6 +86,16 @@ docker compose build app
 docker compose run --rm app python -m src.sonic.export_map_data --all
 ```
 
+For faster iteration on CPU-constrained instances, you can trade ASR quality for speed:
+```bash
+# smaller model + fewer threads (often much faster than medium.en)
+docker compose run --rm -e WHISPER_MODEL=/data/scratch/whisper-models/ggml-base.en.bin app \
+   python -m src.sonic.export_map_data --all --asr-threads 2
+
+# skip ASR entirely (fastest), keep audio features + narration alignment
+docker compose run --rm app python -m src.sonic.export_map_data --all --skip-asr
+```
+
 If you have only changed files under `src/`, the image rebuild is optional because those files are live-mounted into the container. If you change the Dockerfile or `requirements.txt`, rebuild first so the image picks up the new dependencies. Use `--no-cache` only when you intentionally need a full rebuild.
 
 The Whisper binary is built into the image, but the large `medium.en` model is now downloaded on first ASR use into `/mnt/data-volume/whisper-models` via the `/data/scratch` mount. That keeps the image much smaller and avoids re-downloading the model on every rebuild.

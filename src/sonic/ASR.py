@@ -88,7 +88,7 @@ def _build_whisper_runtime_env(whisper_dir: Path) -> Dict[str, str]:
 
 def run_whisper_asr(
     wav_path: Path,
-    threads: int = 4,
+    threads: Optional[int] = None,
 ) -> List[Dict]:
     """
     Runs whisper.cpp on a WAV audio file and returns a list of timestamped transcript segments:
@@ -103,6 +103,8 @@ def run_whisper_asr(
     whisper_dir = DEFAULT_WHISPER_DIR
     whisper_bin = _resolve_whisper_bin(whisper_dir)
     whisper_model = _ensure_whisper_model(DEFAULT_WHISPER_MODEL, whisper_dir)
+    if threads is None:
+        threads = int(os.getenv("WHISPER_THREADS", "4"))
     if not wav_path.exists():
         raise FileNotFoundError(f"WAV audio file not found at {wav_path}")
 
