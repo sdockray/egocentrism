@@ -52,6 +52,26 @@ def _ensure_whisper_model(model_path: Path, whisper_dir: Path) -> Path:
     return model_path
 
 
+def _build_whisper_runtime_env(whisper_dir: Path) -> Dict[str, str]:
+    """Build runtime env so whisper-cli can locate its shared libraries."""
+    env = os.environ.copy()
+    lib_candidates = [
+        whisper_dir / "build" / "src",
+        whisper_dir / "build" / "ggml" / "src",
+        whisper_dir / "build" / "ggml" / "src" / "ggml-blas",
+        whisper_dir / "build" / "ggml" / "src" / "ggml-cpu",
+        whisper_dir / "build" / "ggml" / "src" / "ggml-cuda",
+    ]
+
+    lib_paths = [str(p) for p in lib_candidates if p.exists()]
+    if not lib_paths:
+        return env
+
+    existing = env.get("LD_LIBRARY_PATH", "")
+    env["LD_LIBRARY_PATH"] = ":".join(lib_paths + ([existing] if existing else []))
+    return env
+
+
 def run_whisper_asr(
     wav_path: Path,
     threads: int = 4,
@@ -95,7 +115,7 @@ def run_whisper_asr(
     ]
 
     print(f"Running ASR on {wav_path.name} via whisper.cpp...")
-    subprocess.run(cmd, check=True)
+    subprocess.run(cmd, check=True, env=_build_whisper_runtime_env(whisper_dir))
 
     if not json_path.exists():
         raise RuntimeError(f"Whisper JSON output expected at {json_path} but not found.")
