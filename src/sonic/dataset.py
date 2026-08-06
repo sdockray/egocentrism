@@ -52,7 +52,15 @@ def get_fake_shop_videos(limit: Optional[int] = None) -> List[Dict]:
     anchor_video = None
 
     for v in all_videos:
+        source = v.get("video_source")
+        scenarios = v.get("scenarios") or []
         uid = v.get("video_uid")
+
+        # Keep only FRL Fake Shop videos and skip non-downloadable group IDs.
+        if source != "frl_track_1_public" or "Grocery shopping indoors" not in scenarios:
+            continue
+        if not uid or str(uid).startswith("grp-"):
+            continue
 
         if uid == TARGET_ANCHOR_UID:
             anchor_video = v
