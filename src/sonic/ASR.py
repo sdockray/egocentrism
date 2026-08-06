@@ -8,13 +8,48 @@ speech transcription on WAV audio files and extracts timestamped transcripts.
 import json
 import os
 import subprocess
-import sys
 from pathlib import Path
 from typing import Dict, List, Optional
 
-WHISPER_DIR = Path.home() / "Documents" / "dev" / "prj" / "word-processor" / "whisper.cpp"
-WHISPER_BIN = WHISPER_DIR / "main"
-WHISPER_MODEL = WHISPER_DIR / "models" / "ggml-medium.en.bin"
+DEFAULT_WHISPER_DIR = Path(os.getenv("WHISPER_DIR", "/opt/whisper.cpp"))
+DEFAULT_WHISPER_MODEL = Path(
+    os.getenv("WHISPER_MODEL", "/data/scratch/whisper-models/ggml-medium.en.bin")
+)
+
+
+def _resolve_whisper_bin(whisper_dir: Path) -> Path:
+    candidates = [
+        whisper_dir / "build" / "bin" / "whisper-cli",
+        whisper_dir / "build" / "bin" / "main",
+        whisper_dir / "main",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    raise FileNotFoundError(f"whisper.cpp binary not found under {whisper_dir}")
+
+
+def _ensure_whisper_model(model_path: Path, whisper_dir: Path) -> Path:
+    if model_path.exists() and model_path.stat().st_size > 0:
+        return model_path
+
+    model_path.parent.mkdir(parents=True, exist_ok=True)
+
+    download_script = whisper_dir / "models" / "download-ggml-model.sh"
+    if not download_script.exists():
+        raise FileNotFoundError(f"whisper.cpp model download script not found at {download_script}")
+
+    model_name = model_path.name.removeprefix("ggml-").removesuffix(".bin")
+    subprocess.run(
+        [str(download_script), model_name, str(model_path.parent)],
+        check=True,
+        cwd=whisper_dir,
+    )
+
+    if not model_path.exists():
+        raise FileNotFoundError(f"Whisper model not found at {model_path} after download")
+
+    return model_path
 
 
 def run_whisper_asr(
@@ -31,10 +66,9 @@ def run_whisper_asr(
         }, ...
     ]
     """
-    if not WHISPER_BIN.exists():
-        raise FileNotFoundError(f"whisper.cpp binary not found at {WHISPER_BIN}")
-    if not WHISPER_MODEL.exists():
-        raise FileNotFoundError(f"Whisper model not found at {WHISPER_MODEL}")
+    whisper_dir = DEFAULT_WHISPER_DIR
+    whisper_bin = _resolve_whisper_bin(whisper_dir)
+    whisper_model = _ensure_whisper_model(DEFAULT_WHISPER_MODEL, whisper_dir)
     if not wav_path.exists():
         raise FileNotFoundError(f"WAV audio file not found at {wav_path}")
 
@@ -47,9 +81,9 @@ def run_whisper_asr(
         return _parse_whisper_json(json_path)
 
     cmd = [
-        str(WHISPER_BIN),
+        str(whisper_bin),
         "-m",
-        str(WHISPER_MODEL),
+        str(whisper_model),
         "-f",
         str(wav_path),
         "-t",
@@ -110,7 +144,7 @@ def _parse_timestamp_str(ts) -> float:
     """Helper to convert HH:MM:SS,mmm or ms int/float into seconds float."""
     if isinstance(ts, (int, float)):
         return ts / 1000.0 if ts > 10000 else float(ts)
-    
+
     if isinstance(ts, str):
         clean_ts = ts.replace(",", ".")
         parts = clean_ts.split(":")

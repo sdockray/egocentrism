@@ -20,6 +20,7 @@ services:
       retries: 10
 
   app:
+    image: egocentrism-app
     build: .
     depends_on:
       db:
@@ -41,7 +42,7 @@ services:
     tty: true
 
   notebook:
-    build: .
+    image: egocentrism-app
     depends_on:
       db:
         condition: service_healthy

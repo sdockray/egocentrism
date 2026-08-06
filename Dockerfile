@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.11-slim AS whisper-builder
 
 # --- System dependencies -----------------------------------------------
 # ffmpeg:        video demuxing + audio extraction (used by ego4d clips,
@@ -7,19 +7,28 @@ FROM python:3.11-slim
 # libsndfile1:   required by `soundfile`, which librosa uses for fast WAV I/O
 # git:           some pip packages (incl. occasional ego4d deps) install from VCS
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ffmpeg \
-    libsndfile1 \
     build-essential \
     cmake \
     curl \
     git \
     && rm -rf /var/lib/apt/lists/*
 
-# Build whisper.cpp for fast C++ ASR inference
-RUN git clone https://github.com/ggerganov/whisper.cpp.git /app/whisper.cpp && \
-    cd /app/whisper.cpp && \
-    make -j4 && \
-    ./models/download-ggml-model.sh medium.en
+# Build whisper.cpp once, but do not bake the large model into the image.
+RUN git clone https://github.com/ggerganov/whisper.cpp.git /tmp/whisper.cpp && \
+    cd /tmp/whisper.cpp && \
+    make -j4
+
+FROM python:3.11-slim
+
+# --- Runtime dependencies ----------------------------------------------
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    libsndfile1 \
+    curl \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=whisper-builder /tmp/whisper.cpp /opt/whisper.cpp
 
 WORKDIR /app
 
@@ -33,5 +42,7 @@ COPY src/ ./src/
 # survives container restarts and isn't limited by the instance's root disk.
 RUN mkdir -p /data/scratch
 ENV SCRATCH_DIR=/data/scratch
+ENV WHISPER_DIR=/opt/whisper.cpp
+ENV WHISPER_MODEL=/data/scratch/whisper-models/ggml-medium.en.bin
 
 CMD ["python", "-m", "src.pipeline"]
