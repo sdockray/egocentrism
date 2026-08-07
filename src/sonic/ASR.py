@@ -219,7 +219,6 @@ def _discover_supported_whisper_flags(whisper_bin: Path, whisper_dir: Path) -> s
     return supported
 
 
-def _build_decode_args(whisper_bin: Path, whisper_dir: Path) -> List[str]:
 def _build_decode_args(whisper_bin: Path, whisper_dir: Path, attempt_idx: int) -> List[str]:
     supported = _discover_supported_whisper_flags(whisper_bin, whisper_dir)
     args: List[str] = []
