@@ -19,6 +19,16 @@ DEFAULT_WHISPER_MODEL = Path(
 DEFAULT_WHISPER_RETRY_MODEL = os.getenv("WHISPER_RETRY_MODEL", "base.en")
 DEFAULT_WHISPER_MAX_RETRIES = int(os.getenv("WHISPER_MAX_RETRIES", "1"))
 
+DEFAULT_WHISPER_TEMPERATURE = float(os.getenv("WHISPER_TEMPERATURE", "0"))
+DEFAULT_WHISPER_TEMPERATURE_INC = float(os.getenv("WHISPER_TEMPERATURE_INC", "0.2"))
+DEFAULT_WHISPER_ENTROPY_THOLD = float(os.getenv("WHISPER_ENTROPY_THOLD", "2.2"))
+DEFAULT_WHISPER_LOGPROB_THOLD = float(os.getenv("WHISPER_LOGPROB_THOLD", "-0.8"))
+DEFAULT_WHISPER_NO_SPEECH_THOLD = float(os.getenv("WHISPER_NO_SPEECH_THOLD", "0.5"))
+DEFAULT_WHISPER_VAD = os.getenv("WHISPER_VAD", "0").strip().lower() in {"1", "true", "yes", "on"}
+DEFAULT_WHISPER_VAD_MODEL = os.getenv("WHISPER_VAD_MODEL", "").strip()
+
+_WHISPER_SUPPORTED_FLAGS: Optional[set[str]] = None
+
 
 def _resolve_whisper_bin(whisper_dir: Path) -> Path:
     candidates = [
@@ -164,6 +174,69 @@ def _candidate_model_paths(primary_model: Path) -> List[Path]:
     return candidates
 
 
+def _discover_supported_whisper_flags(whisper_bin: Path, whisper_dir: Path) -> set[str]:
+    global _WHISPER_SUPPORTED_FLAGS
+    if _WHISPER_SUPPORTED_FLAGS is not None:
+        return _WHISPER_SUPPORTED_FLAGS
+
+    try:
+        result = subprocess.run(
+            [str(whisper_bin), "--help"],
+            check=True,
+            capture_output=True,
+            text=True,
+            env=_build_whisper_runtime_env(whisper_dir),
+        )
+        help_text = f"{result.stdout}\n{result.stderr}"
+    except Exception:
+        help_text = ""
+
+    supported = set()
+    for flag in (
+        "--temperature",
+        "--temperature-inc",
+        "--entropy-thold",
+        "--logprob-thold",
+        "--no-speech-thold",
+        "--vad",
+        "--vad-model",
+    ):
+        if flag in help_text:
+            supported.add(flag)
+
+    _WHISPER_SUPPORTED_FLAGS = supported
+    return supported
+
+
+def _build_decode_args(whisper_bin: Path, whisper_dir: Path) -> List[str]:
+    supported = _discover_supported_whisper_flags(whisper_bin, whisper_dir)
+    args: List[str] = []
+
+    if "--temperature" in supported:
+        args += ["--temperature", str(DEFAULT_WHISPER_TEMPERATURE)]
+    if "--temperature-inc" in supported:
+        args += ["--temperature-inc", str(DEFAULT_WHISPER_TEMPERATURE_INC)]
+    if "--entropy-thold" in supported:
+        args += ["--entropy-thold", str(DEFAULT_WHISPER_ENTROPY_THOLD)]
+    if "--logprob-thold" in supported:
+        args += ["--logprob-thold", str(DEFAULT_WHISPER_LOGPROB_THOLD)]
+    if "--no-speech-thold" in supported:
+        args += ["--no-speech-thold", str(DEFAULT_WHISPER_NO_SPEECH_THOLD)]
+
+    if DEFAULT_WHISPER_VAD and "--vad" in supported:
+        args += ["--vad"]
+        if DEFAULT_WHISPER_VAD_MODEL and "--vad-model" in supported:
+            vad_model_path = Path(DEFAULT_WHISPER_VAD_MODEL)
+            if vad_model_path.exists():
+                args += ["--vad-model", str(vad_model_path)]
+            else:
+                print(
+                    f"WHISPER_VAD_MODEL path not found ({vad_model_path}); continuing without --vad-model"
+                )
+
+    return args
+
+
 def _run_whisper_once(
     whisper_bin: Path,
     whisper_model: Path,
@@ -171,6 +244,7 @@ def _run_whisper_once(
     out_prefix: Path,
     threads: int,
     whisper_dir: Path,
+    decode_args: List[str],
 ) -> Path:
     json_path = Path(f"{out_prefix}.json")
     if json_path.exists():
@@ -189,6 +263,7 @@ def _run_whisper_once(
         str(out_prefix),
         "-np",
     ]
+    cmd.extend(decode_args)
     subprocess.run(cmd, check=True, env=_build_whisper_runtime_env(whisper_dir))
 
     if not json_path.exists():
@@ -236,6 +311,7 @@ def run_whisper_asr(
     model_candidates = _candidate_model_paths(whisper_model)
     attempts = max_retries + 1
     last_error = None
+    decode_args = _build_decode_args(whisper_bin, whisper_dir)
 
     for attempt_idx in range(attempts):
         model_idx = min(attempt_idx, len(model_candidates) - 1)
@@ -253,6 +329,7 @@ def run_whisper_asr(
                 out_prefix=out_prefix,
                 threads=threads,
                 whisper_dir=whisper_dir,
+                decode_args=decode_args,
             )
             transcripts = _parse_whisper_json(produced_json)
             looped, reasons = _is_looping_transcript(transcripts)

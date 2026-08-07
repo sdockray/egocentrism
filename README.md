@@ -105,17 +105,32 @@ docker compose run --rm app python -m src.sonic.audit_asr
 
 In-run ASR loop recovery is enabled by default: if Whisper output looks like a repetition loop,
 the job retries transcription for that video automatically.
-You can control retries and fallback model with environment variables:
+You can control retries, model fallback, and decode fallback behavior with environment variables:
 ```bash
-# one retry (default) and fallback to base.en
+# recommended anti-loop settings on CPU:
+# - retry once on detected loop
+# - fallback model on retry
+# - explicit temperature ladder + stricter fallback thresholds
 docker compose run --rm \
    -e WHISPER_MAX_RETRIES=1 \
    -e WHISPER_RETRY_MODEL=base.en \
+   -e WHISPER_TEMPERATURE=0 \
+   -e WHISPER_TEMPERATURE_INC=0.2 \
+   -e WHISPER_ENTROPY_THOLD=2.2 \
+   -e WHISPER_LOGPROB_THOLD=-0.8 \
+   -e WHISPER_NO_SPEECH_THOLD=0.5 \
    app python -m src.sonic.export_map_data --all --asr-threads 4
 
 # disable automatic retry
 docker compose run --rm -e WHISPER_MAX_RETRIES=0 app \
    python -m src.sonic.export_map_data --all --asr-threads 4
+
+# optional: enable VAD if your whisper.cpp build supports it
+# (set WHISPER_VAD_MODEL only if you have a local silero VAD model file)
+docker compose run --rm \
+   -e WHISPER_VAD=1 \
+   -e WHISPER_VAD_MODEL=/data/scratch/whisper-models/silero-vad.onnx \
+   app python -m src.sonic.export_map_data --all --asr-threads 4
 ```
 
 If you have only changed files under `src/`, the image rebuild is optional because those files are live-mounted into the container. If you change the Dockerfile or `requirements.txt`, rebuild first so the image picks up the new dependencies. Use `--no-cache` only when you intentionally need a full rebuild.
