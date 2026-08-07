@@ -129,10 +129,16 @@ docker compose run --rm -e WHISPER_MAX_RETRIES=0 app \
    python -m src.sonic.export_map_data --all --asr-threads 4
 
 # optional: enable VAD if your whisper.cpp build supports it
-# (set WHISPER_VAD_MODEL only if you have a local silero VAD model file)
+# (set WHISPER_VAD_MODEL only if you have a whisper.cpp-compatible VAD model for your build)
 docker compose run --rm \
    -e WHISPER_VAD=1 \
    -e WHISPER_VAD_MODEL=/data/scratch/whisper-models/silero-vad.onnx \
+   app python -m src.sonic.export_map_data --all --asr-threads 4
+
+# if VAD keeps failing with "failed to process audio", run without explicit VAD model first
+# (many builds are picky about VAD model format/path)
+docker compose run --rm \
+   -e WHISPER_VAD=1 \
    app python -m src.sonic.export_map_data --all --asr-threads 4
 ```
 

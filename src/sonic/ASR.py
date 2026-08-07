@@ -286,6 +286,25 @@ def _run_whisper_once(
     return json_path
 
 
+def _decode_args_without_vad(decode_args: List[str]) -> List[str]:
+    """Strip VAD flags for fallback retry if VAD/model compatibility fails."""
+    stripped: List[str] = []
+    skip_next = False
+    for idx, arg in enumerate(decode_args):
+        if skip_next:
+            skip_next = False
+            continue
+        if arg == "--vad":
+            continue
+        if arg == "--vad-model":
+            # Also drop the following model-path token when present.
+            if idx + 1 < len(decode_args):
+                skip_next = True
+            continue
+        stripped.append(arg)
+    return stripped
+
+
 def run_whisper_asr(
     wav_path: Path,
     threads: Optional[int] = None,
@@ -341,15 +360,37 @@ def run_whisper_asr(
         )
 
         try:
-            produced_json = _run_whisper_once(
-                whisper_bin=whisper_bin,
-                whisper_model=model_path,
-                wav_path=wav_path,
-                out_prefix=out_prefix,
-                threads=threads,
-                whisper_dir=whisper_dir,
-                decode_args=decode_args,
-            )
+            try:
+                produced_json = _run_whisper_once(
+                    whisper_bin=whisper_bin,
+                    whisper_model=model_path,
+                    wav_path=wav_path,
+                    out_prefix=out_prefix,
+                    threads=threads,
+                    whisper_dir=whisper_dir,
+                    decode_args=decode_args,
+                )
+            except subprocess.CalledProcessError as vad_exc:
+                vad_enabled = "--vad" in decode_args or "--vad-model" in decode_args
+                if not vad_enabled:
+                    raise
+
+                # Some whisper.cpp builds reject certain VAD model formats/paths.
+                # Fall back to the same decode attempt with VAD disabled.
+                print(
+                    f"VAD decode failed for {wav_path.name} (exit={vad_exc.returncode}); "
+                    "retrying this attempt without VAD flags"
+                )
+                produced_json = _run_whisper_once(
+                    whisper_bin=whisper_bin,
+                    whisper_model=model_path,
+                    wav_path=wav_path,
+                    out_prefix=out_prefix,
+                    threads=threads,
+                    whisper_dir=whisper_dir,
+                    decode_args=_decode_args_without_vad(decode_args),
+                )
+
             transcripts = _parse_whisper_json(produced_json)
             looped, reasons = _is_looping_transcript(transcripts)
             if not looped:
