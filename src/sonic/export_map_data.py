@@ -31,6 +31,7 @@ def build_fake_shop_map_dataset(
     hop_sec: float = 1.0,
     asr_threads: int = 4,
     skip_asr: bool = False,
+    skip_video_on_asr_failure: bool = False,
 ) -> Dict:
     """
     Builds the unified dataset for the Giant MFCC Map.
@@ -71,6 +72,9 @@ def build_fake_shop_map_dataset(
                 print(f" -> Aligned {len(asr_transcripts)} ASR speech phrases")
         except Exception as e:
             print(f" -> Warning: ASR failed for {uid}: {e}", file=sys.stderr)
+            if skip_video_on_asr_failure:
+                print(f" -> Skipping video {uid} due to ASR failure")
+                continue
             for seg in segments:
                 seg["asr_text"] = ""
 
@@ -126,6 +130,11 @@ if __name__ == "__main__":
     parser.add_argument("--all", action="store_true", help="Process all available fake shop videos in 2026/ego4d.json")
     parser.add_argument("--asr-threads", type=int, default=4, help="Threads for whisper.cpp ASR (default: 4)")
     parser.add_argument("--skip-asr", action="store_true", help="Skip ASR for speed; narration alignment still runs")
+    parser.add_argument(
+        "--skip-video-on-asr-failure",
+        action="store_true",
+        help="Skip the entire video when ASR fails/loops after retries",
+    )
 
     args = parser.parse_args()
     target_limit = None if args.all or args.limit <= 0 else args.limit
@@ -136,4 +145,5 @@ if __name__ == "__main__":
         hop_sec=args.hop,
         asr_threads=args.asr_threads,
         skip_asr=args.skip_asr,
+        skip_video_on_asr_failure=args.skip_video_on_asr_failure,
     )

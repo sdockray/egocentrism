@@ -8,6 +8,7 @@ speech transcription on WAV audio files and extracts timestamped transcripts.
 import json
 import os
 import subprocess
+import wave
 from collections import Counter
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -31,6 +32,13 @@ DEFAULT_WHISPER_VAD = os.getenv("WHISPER_VAD", "0").strip().lower() in {"1", "tr
 DEFAULT_WHISPER_VAD_MODEL = os.getenv("WHISPER_VAD_MODEL", "").strip()
 DEFAULT_ASR_LOOP_STREAK_THOLD = int(os.getenv("ASR_LOOP_STREAK_THOLD", "10"))
 DEFAULT_ASR_BRACKET_LOOP_STREAK_THOLD = int(os.getenv("ASR_BRACKET_LOOP_STREAK_THOLD", "6"))
+DEFAULT_ASR_CHUNK_FALLBACK = os.getenv("ASR_CHUNK_FALLBACK", "1").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+DEFAULT_ASR_CHUNK_SEC = float(os.getenv("ASR_CHUNK_SEC", "120"))
 
 _WHISPER_SUPPORTED_FLAGS: Optional[set[str]] = None
 
@@ -305,6 +313,155 @@ def _decode_args_without_vad(decode_args: List[str]) -> List[str]:
     return stripped
 
 
+def _wav_duration_seconds(wav_path: Path) -> float:
+    with wave.open(str(wav_path), "rb") as wav_f:
+        frames = wav_f.getnframes()
+        rate = wav_f.getframerate()
+        if rate <= 0:
+            return 0.0
+        return frames / float(rate)
+
+
+def _extract_wav_chunk(source_wav: Path, chunk_wav: Path, start_sec: float, duration_sec: float) -> None:
+    cmd = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-ss",
+        str(start_sec),
+        "-t",
+        str(duration_sec),
+        "-i",
+        str(source_wav),
+        str(chunk_wav),
+    ]
+    subprocess.run(cmd, check=True)
+
+
+def _offset_transcripts(transcripts: List[Dict], offset_sec: float) -> List[Dict]:
+    adjusted = []
+    for item in transcripts:
+        adjusted.append(
+            {
+                "start_sec": round(item["start_sec"] + offset_sec, 2),
+                "end_sec": round(item["end_sec"] + offset_sec, 2),
+                "text": item["text"],
+                "norm_text": item.get("norm_text", _normalize_text(item["text"])),
+            }
+        )
+    return adjusted
+
+
+def _run_whisper_asr_chunked(
+    wav_path: Path,
+    threads: int,
+    whisper_bin: Path,
+    whisper_dir: Path,
+    model_candidates: List[Path],
+    max_retries: int,
+    chunk_sec: float,
+) -> List[Dict]:
+    duration = _wav_duration_seconds(wav_path)
+    if duration <= 0:
+        raise RuntimeError(f"Unable to determine WAV duration for chunk fallback: {wav_path}")
+
+    chunk_dir = wav_path.parent / "asr_chunks"
+    chunk_dir.mkdir(parents=True, exist_ok=True)
+    merged: List[Dict] = []
+    num_chunks = int((duration + chunk_sec - 1) // chunk_sec)
+
+    print(
+        f"Falling back to chunked ASR for {wav_path.name}: "
+        f"duration={duration/60.0:.1f}m, chunk={chunk_sec:.0f}s, chunks={num_chunks}"
+    )
+
+    for chunk_idx in range(num_chunks):
+        start_sec = chunk_idx * chunk_sec
+        dur = min(chunk_sec, max(0.0, duration - start_sec))
+        if dur <= 0:
+            continue
+
+        chunk_wav = chunk_dir / f"{wav_path.stem}.chunk_{chunk_idx:04d}.wav"
+        _extract_wav_chunk(wav_path, chunk_wav, start_sec=start_sec, duration_sec=dur)
+
+        chunk_out_prefix = chunk_dir / f"{wav_path.stem}.chunk_{chunk_idx:04d}"
+        chunk_attempts = max_retries + 1
+        chunk_ok = False
+        chunk_last_error = None
+
+        for attempt_idx in range(chunk_attempts):
+            model_idx = min(attempt_idx, len(model_candidates) - 1)
+            model_path = _ensure_whisper_model(model_candidates[model_idx], whisper_dir)
+            decode_args = _build_decode_args(whisper_bin, whisper_dir, attempt_idx=attempt_idx)
+
+            try:
+                try:
+                    chunk_json = _run_whisper_once(
+                        whisper_bin=whisper_bin,
+                        whisper_model=model_path,
+                        wav_path=chunk_wav,
+                        out_prefix=chunk_out_prefix,
+                        threads=threads,
+                        whisper_dir=whisper_dir,
+                        decode_args=decode_args,
+                    )
+                except subprocess.CalledProcessError:
+                    vad_enabled = "--vad" in decode_args or "--vad-model" in decode_args
+                    if not vad_enabled:
+                        raise
+                    chunk_json = _run_whisper_once(
+                        whisper_bin=whisper_bin,
+                        whisper_model=model_path,
+                        wav_path=chunk_wav,
+                        out_prefix=chunk_out_prefix,
+                        threads=threads,
+                        whisper_dir=whisper_dir,
+                        decode_args=_decode_args_without_vad(decode_args),
+                    )
+
+                chunk_transcripts = _parse_whisper_json(chunk_json)
+                looped, reasons = _is_looping_transcript(chunk_transcripts)
+                if looped:
+                    chunk_last_error = RuntimeError(
+                        f"chunk {chunk_idx} looped: {', '.join(reasons)}"
+                    )
+                    if attempt_idx < chunk_attempts - 1:
+                        continue
+                    raise chunk_last_error
+
+                merged.extend(_offset_transcripts(chunk_transcripts, offset_sec=start_sec))
+                chunk_ok = True
+                break
+            except Exception as exc:
+                chunk_last_error = exc
+                if attempt_idx < chunk_attempts - 1:
+                    continue
+
+        if not chunk_ok:
+            print(f"Skipping ASR chunk {chunk_idx + 1}/{num_chunks} after failures: {chunk_last_error}")
+
+        # best effort cleanup for chunk wav/json artifacts
+        for ext in (".wav", ".json", ".txt", ".srt", ".vtt"):
+            p = chunk_dir / f"{wav_path.stem}.chunk_{chunk_idx:04d}{ext}"
+            if p.exists():
+                try:
+                    p.unlink()
+                except OSError:
+                    pass
+
+    if not merged:
+        raise RuntimeError("Chunked ASR fallback produced no transcripts")
+
+    merged.sort(key=lambda s: (s["start_sec"], s["end_sec"]))
+    final_looped, final_reasons = _is_looping_transcript(merged)
+    if final_looped:
+        raise RuntimeError("Chunked ASR fallback still looped: " + ", ".join(final_reasons))
+
+    return merged
+
+
 def run_whisper_asr(
     wav_path: Path,
     threads: Optional[int] = None,
@@ -405,6 +562,17 @@ def run_whisper_asr(
             last_error = exc
             if attempt_idx < attempts - 1:
                 print(f"Retrying ASR for {wav_path.name} after failure: {exc}")
+
+    if DEFAULT_ASR_CHUNK_FALLBACK and DEFAULT_ASR_CHUNK_SEC > 0:
+        return _run_whisper_asr_chunked(
+            wav_path=wav_path,
+            threads=threads,
+            whisper_bin=whisper_bin,
+            whisper_dir=whisper_dir,
+            model_candidates=model_candidates,
+            max_retries=max_retries,
+            chunk_sec=DEFAULT_ASR_CHUNK_SEC,
+        )
 
     raise RuntimeError(f"ASR failed after {attempts} attempt(s): {last_error}")
 

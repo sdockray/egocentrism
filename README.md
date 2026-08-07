@@ -140,6 +140,12 @@ docker compose run --rm \
 docker compose run --rm \
    -e WHISPER_VAD=1 \
    app python -m src.sonic.export_map_data --all --asr-threads 4
+
+# if full-video ASR still loops, enable chunk fallback and skip hard-failed videos
+docker compose run --rm \
+   -e ASR_CHUNK_FALLBACK=1 \
+   -e ASR_CHUNK_SEC=120 \
+   app python -m src.sonic.export_map_data --all --asr-threads 4 --skip-video-on-asr-failure
 ```
 
 If you have only changed files under `src/`, the image rebuild is optional because those files are live-mounted into the container. If you change the Dockerfile or `requirements.txt`, rebuild first so the image picks up the new dependencies. Use `--no-cache` only when you intentionally need a full rebuild.
