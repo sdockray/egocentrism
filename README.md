@@ -96,6 +96,28 @@ docker compose run --rm -e WHISPER_MODEL=/data/scratch/whisper-models/ggml-base.
 docker compose run --rm app python -m src.sonic.export_map_data --all --skip-asr
 ```
 
+Post-run ASR audit (detect likely repetition-loop failures and mark UIDs for re-transcription):
+```bash
+docker compose run --rm app python -m src.sonic.audit_asr
+# writes report: /app/2026/audio_cache/asr/asr_audit_report.json
+# writes UID list: /app/2026/asr_retranscribe_uids.txt
+```
+
+In-run ASR loop recovery is enabled by default: if Whisper output looks like a repetition loop,
+the job retries transcription for that video automatically.
+You can control retries and fallback model with environment variables:
+```bash
+# one retry (default) and fallback to base.en
+docker compose run --rm \
+   -e WHISPER_MAX_RETRIES=1 \
+   -e WHISPER_RETRY_MODEL=base.en \
+   app python -m src.sonic.export_map_data --all --asr-threads 4
+
+# disable automatic retry
+docker compose run --rm -e WHISPER_MAX_RETRIES=0 app \
+   python -m src.sonic.export_map_data --all --asr-threads 4
+```
+
 If you have only changed files under `src/`, the image rebuild is optional because those files are live-mounted into the container. If you change the Dockerfile or `requirements.txt`, rebuild first so the image picks up the new dependencies. Use `--no-cache` only when you intentionally need a full rebuild.
 
 The Whisper binary is built into the image, but the large `medium.en` model is now downloaded on first ASR use into `/mnt/data-volume/whisper-models` via the `/data/scratch` mount. That keeps the image much smaller and avoids re-downloading the model on every rebuild.

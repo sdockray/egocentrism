@@ -8,13 +8,16 @@ speech transcription on WAV audio files and extracts timestamped transcripts.
 import json
 import os
 import subprocess
+from collections import Counter
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 DEFAULT_WHISPER_DIR = Path(os.getenv("WHISPER_DIR", "/opt/whisper.cpp"))
 DEFAULT_WHISPER_MODEL = Path(
     os.getenv("WHISPER_MODEL", "/data/scratch/whisper-models/ggml-medium.en.bin")
 )
+DEFAULT_WHISPER_RETRY_MODEL = os.getenv("WHISPER_RETRY_MODEL", "base.en")
+DEFAULT_WHISPER_MAX_RETRIES = int(os.getenv("WHISPER_MAX_RETRIES", "1"))
 
 
 def _resolve_whisper_bin(whisper_dir: Path) -> Path:
@@ -86,35 +89,92 @@ def _build_whisper_runtime_env(whisper_dir: Path) -> Dict[str, str]:
     return env
 
 
-def run_whisper_asr(
+def _max_consecutive_repeat(segments: List[Dict]) -> Tuple[int, str]:
+    max_streak = 0
+    max_phrase = ""
+    curr_streak = 0
+    curr_phrase = ""
+
+    for seg in segments:
+        phrase = seg.get("norm_text", "")
+        if phrase and phrase == curr_phrase:
+            curr_streak += 1
+        else:
+            curr_phrase = phrase
+            curr_streak = 1 if phrase else 0
+
+        if curr_streak > max_streak:
+            max_streak = curr_streak
+            max_phrase = curr_phrase
+
+    return max_streak, max_phrase
+
+
+def _tail_repeat_stats(segments: List[Dict], tail_window_sec: float) -> Tuple[int, str, float, float]:
+    if not segments:
+        return 0, "", 0.0, 0.0
+
+    end_time = segments[-1]["end_sec"]
+    start_cutoff = max(0.0, end_time - tail_window_sec)
+    tail_segments = [s for s in segments if s["start_sec"] >= start_cutoff and s.get("norm_text")]
+
+    if not tail_segments:
+        return 0, "", 0.0, 0.0
+
+    counts = Counter(s["norm_text"] for s in tail_segments)
+    top_phrase, top_count = counts.most_common(1)[0]
+    ratio = top_count / len(tail_segments)
+    tail_duration = tail_segments[-1]["end_sec"] - tail_segments[0]["start_sec"]
+    return top_count, top_phrase, ratio, max(0.0, tail_duration)
+
+
+def _is_looping_transcript(segments: List[Dict]) -> Tuple[bool, List[str]]:
+    """Detect likely ASR degeneration loops (repeated phrase dominance)."""
+    if not segments:
+        return True, ["empty_transcript"]
+
+    reasons = []
+    max_streak, streak_phrase = _max_consecutive_repeat(segments)
+    if max_streak >= 25:
+        reasons.append(f"long_consecutive_repeat:{max_streak}:{streak_phrase}")
+
+    tail_count, tail_phrase, tail_ratio, tail_duration = _tail_repeat_stats(segments, tail_window_sec=900.0)
+    if tail_count >= 40 and tail_ratio >= 0.65 and tail_duration >= 300.0:
+        reasons.append(
+            f"tail_repeat_dominance:count={tail_count}:ratio={tail_ratio:.3f}:dur={tail_duration:.1f}:phrase={tail_phrase}"
+        )
+
+    return len(reasons) > 0, reasons
+
+
+def _model_path_for_name(model_name: str, model_dir: Path) -> Path:
+    name = model_name.strip()
+    if name.endswith(".bin"):
+        return model_dir / name
+    if name.startswith("ggml-"):
+        return model_dir / f"{name}.bin"
+    return model_dir / f"ggml-{name}.bin"
+
+
+def _candidate_model_paths(primary_model: Path) -> List[Path]:
+    candidates = [primary_model]
+    retry_model = _model_path_for_name(DEFAULT_WHISPER_RETRY_MODEL, primary_model.parent)
+    if retry_model != primary_model:
+        candidates.append(retry_model)
+    return candidates
+
+
+def _run_whisper_once(
+    whisper_bin: Path,
+    whisper_model: Path,
     wav_path: Path,
-    threads: Optional[int] = None,
-) -> List[Dict]:
-    """
-    Runs whisper.cpp on a WAV audio file and returns a list of timestamped transcript segments:
-    [
-        {
-            "start_sec": 10.5,
-            "end_sec": 14.2,
-            "text": "How much for this item?"
-        }, ...
-    ]
-    """
-    whisper_dir = DEFAULT_WHISPER_DIR
-    whisper_bin = _resolve_whisper_bin(whisper_dir)
-    whisper_model = _ensure_whisper_model(DEFAULT_WHISPER_MODEL, whisper_dir)
-    if threads is None:
-        threads = int(os.getenv("WHISPER_THREADS", "4"))
-    if not wav_path.exists():
-        raise FileNotFoundError(f"WAV audio file not found at {wav_path}")
-
-    output_dir = wav_path.parent / "asr"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    out_prefix = output_dir / wav_path.stem
+    out_prefix: Path,
+    threads: int,
+    whisper_dir: Path,
+) -> Path:
     json_path = Path(f"{out_prefix}.json")
-
-    if json_path.exists() and json_path.stat().st_size > 0:
-        return _parse_whisper_json(json_path)
+    if json_path.exists():
+        json_path.unlink()
 
     cmd = [
         str(whisper_bin),
@@ -129,14 +189,87 @@ def run_whisper_asr(
         str(out_prefix),
         "-np",
     ]
-
-    print(f"Running ASR on {wav_path.name} via whisper.cpp...")
     subprocess.run(cmd, check=True, env=_build_whisper_runtime_env(whisper_dir))
 
     if not json_path.exists():
         raise RuntimeError(f"Whisper JSON output expected at {json_path} but not found.")
+    return json_path
 
-    return _parse_whisper_json(json_path)
+
+def run_whisper_asr(
+    wav_path: Path,
+    threads: Optional[int] = None,
+    max_retries: Optional[int] = None,
+) -> List[Dict]:
+    """
+    Runs whisper.cpp on a WAV audio file and returns a list of timestamped transcript segments:
+    [
+        {
+            "start_sec": 10.5,
+            "end_sec": 14.2,
+            "text": "How much for this item?"
+        }, ...
+    ]
+    """
+    whisper_dir = DEFAULT_WHISPER_DIR
+    whisper_bin = _resolve_whisper_bin(whisper_dir)
+    whisper_model = DEFAULT_WHISPER_MODEL
+    if threads is None:
+        threads = int(os.getenv("WHISPER_THREADS", "4"))
+    if max_retries is None:
+        max_retries = DEFAULT_WHISPER_MAX_RETRIES
+    if not wav_path.exists():
+        raise FileNotFoundError(f"WAV audio file not found at {wav_path}")
+
+    output_dir = wav_path.parent / "asr"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    out_prefix = output_dir / wav_path.stem
+    json_path = Path(f"{out_prefix}.json")
+
+    if json_path.exists() and json_path.stat().st_size > 0:
+        cached = _parse_whisper_json(json_path)
+        looped, reasons = _is_looping_transcript(cached)
+        if not looped:
+            return cached
+        print(f"Cached ASR for {wav_path.name} looks degenerate ({'; '.join(reasons)}); retrying...")
+
+    model_candidates = _candidate_model_paths(whisper_model)
+    attempts = max_retries + 1
+    last_error = None
+
+    for attempt_idx in range(attempts):
+        model_idx = min(attempt_idx, len(model_candidates) - 1)
+        model_path = _ensure_whisper_model(model_candidates[model_idx], whisper_dir)
+        print(
+            f"Running ASR on {wav_path.name} via whisper.cpp "
+            f"(attempt {attempt_idx + 1}/{attempts}, model={model_path.name}, threads={threads})..."
+        )
+
+        try:
+            produced_json = _run_whisper_once(
+                whisper_bin=whisper_bin,
+                whisper_model=model_path,
+                wav_path=wav_path,
+                out_prefix=out_prefix,
+                threads=threads,
+                whisper_dir=whisper_dir,
+            )
+            transcripts = _parse_whisper_json(produced_json)
+            looped, reasons = _is_looping_transcript(transcripts)
+            if not looped:
+                return transcripts
+
+            last_error = RuntimeError(
+                "ASR transcript flagged as likely loop failure: " + ", ".join(reasons)
+            )
+            if attempt_idx < attempts - 1:
+                print(f"Retrying ASR for {wav_path.name} after loop detection: {', '.join(reasons)}")
+        except Exception as exc:
+            last_error = exc
+            if attempt_idx < attempts - 1:
+                print(f"Retrying ASR for {wav_path.name} after failure: {exc}")
+
+    raise RuntimeError(f"ASR failed after {attempts} attempt(s): {last_error}")
 
 
 def _parse_whisper_json(json_path: Path) -> List[Dict]:
@@ -170,6 +303,7 @@ def _parse_whisper_json(json_path: Path) -> List[Dict]:
                 "start_sec": round(start_sec, 2),
                 "end_sec": round(end_sec, 2),
                 "text": text,
+                "norm_text": _normalize_text(text),
             }
         )
 
@@ -193,6 +327,12 @@ def _parse_timestamp_str(ts) -> float:
         else:
             return float(clean_ts)
     return 0.0
+
+
+def _normalize_text(text: str) -> str:
+    lowered = text.lower().strip()
+    cleaned = "".join(ch if ch.isalnum() or ch.isspace() else " " for ch in lowered)
+    return " ".join(cleaned.split())
 
 
 def align_asr_with_segments(
