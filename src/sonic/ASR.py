@@ -21,11 +21,16 @@ DEFAULT_WHISPER_MAX_RETRIES = int(os.getenv("WHISPER_MAX_RETRIES", "1"))
 
 DEFAULT_WHISPER_TEMPERATURE = float(os.getenv("WHISPER_TEMPERATURE", "0"))
 DEFAULT_WHISPER_TEMPERATURE_INC = float(os.getenv("WHISPER_TEMPERATURE_INC", "0.2"))
+DEFAULT_WHISPER_RETRY_TEMPERATURE_BUMP = float(
+    os.getenv("WHISPER_RETRY_TEMPERATURE_BUMP", "0.4")
+)
 DEFAULT_WHISPER_ENTROPY_THOLD = float(os.getenv("WHISPER_ENTROPY_THOLD", "2.2"))
 DEFAULT_WHISPER_LOGPROB_THOLD = float(os.getenv("WHISPER_LOGPROB_THOLD", "-0.8"))
 DEFAULT_WHISPER_NO_SPEECH_THOLD = float(os.getenv("WHISPER_NO_SPEECH_THOLD", "0.5"))
 DEFAULT_WHISPER_VAD = os.getenv("WHISPER_VAD", "0").strip().lower() in {"1", "true", "yes", "on"}
 DEFAULT_WHISPER_VAD_MODEL = os.getenv("WHISPER_VAD_MODEL", "").strip()
+DEFAULT_ASR_LOOP_STREAK_THOLD = int(os.getenv("ASR_LOOP_STREAK_THOLD", "10"))
+DEFAULT_ASR_BRACKET_LOOP_STREAK_THOLD = int(os.getenv("ASR_BRACKET_LOOP_STREAK_THOLD", "6"))
 
 _WHISPER_SUPPORTED_FLAGS: Optional[set[str]] = None
 
@@ -145,8 +150,14 @@ def _is_looping_transcript(segments: List[Dict]) -> Tuple[bool, List[str]]:
 
     reasons = []
     max_streak, streak_phrase = _max_consecutive_repeat(segments)
-    if max_streak >= 25:
+    if max_streak >= DEFAULT_ASR_LOOP_STREAK_THOLD:
         reasons.append(f"long_consecutive_repeat:{max_streak}:{streak_phrase}")
+
+    # Bracketed narrator/caption repeats (e.g. [This is a video of...]) are a common
+    # early signal of whisper degeneration and should trigger sooner.
+    bracket_like = streak_phrase.strip().startswith("[") and streak_phrase.strip().endswith("]")
+    if bracket_like and max_streak >= DEFAULT_ASR_BRACKET_LOOP_STREAK_THOLD:
+        reasons.append(f"bracket_repeat:{max_streak}:{streak_phrase}")
 
     tail_count, tail_phrase, tail_ratio, tail_duration = _tail_repeat_stats(segments, tail_window_sec=900.0)
     if tail_count >= 40 and tail_ratio >= 0.65 and tail_duration >= 300.0:
@@ -209,11 +220,16 @@ def _discover_supported_whisper_flags(whisper_bin: Path, whisper_dir: Path) -> s
 
 
 def _build_decode_args(whisper_bin: Path, whisper_dir: Path) -> List[str]:
+def _build_decode_args(whisper_bin: Path, whisper_dir: Path, attempt_idx: int) -> List[str]:
     supported = _discover_supported_whisper_flags(whisper_bin, whisper_dir)
     args: List[str] = []
+    attempt_temperature = min(
+        1.0,
+        DEFAULT_WHISPER_TEMPERATURE + (attempt_idx * DEFAULT_WHISPER_RETRY_TEMPERATURE_BUMP),
+    )
 
     if "--temperature" in supported:
-        args += ["--temperature", str(DEFAULT_WHISPER_TEMPERATURE)]
+        args += ["--temperature", str(attempt_temperature)]
     if "--temperature-inc" in supported:
         args += ["--temperature-inc", str(DEFAULT_WHISPER_TEMPERATURE_INC)]
     if "--entropy-thold" in supported:
@@ -311,14 +327,18 @@ def run_whisper_asr(
     model_candidates = _candidate_model_paths(whisper_model)
     attempts = max_retries + 1
     last_error = None
-    decode_args = _build_decode_args(whisper_bin, whisper_dir)
-
     for attempt_idx in range(attempts):
         model_idx = min(attempt_idx, len(model_candidates) - 1)
         model_path = _ensure_whisper_model(model_candidates[model_idx], whisper_dir)
+        decode_args = _build_decode_args(whisper_bin, whisper_dir, attempt_idx=attempt_idx)
+        temp_display = min(
+            1.0,
+            DEFAULT_WHISPER_TEMPERATURE + (attempt_idx * DEFAULT_WHISPER_RETRY_TEMPERATURE_BUMP),
+        )
         print(
             f"Running ASR on {wav_path.name} via whisper.cpp "
-            f"(attempt {attempt_idx + 1}/{attempts}, model={model_path.name}, threads={threads})..."
+            f"(attempt {attempt_idx + 1}/{attempts}, model={model_path.name}, "
+            f"threads={threads}, temp={temp_display})..."
         )
 
         try:

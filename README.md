@@ -116,9 +116,12 @@ docker compose run --rm \
    -e WHISPER_RETRY_MODEL=base.en \
    -e WHISPER_TEMPERATURE=0 \
    -e WHISPER_TEMPERATURE_INC=0.2 \
+   -e WHISPER_RETRY_TEMPERATURE_BUMP=0.4 \
    -e WHISPER_ENTROPY_THOLD=2.2 \
    -e WHISPER_LOGPROB_THOLD=-0.8 \
    -e WHISPER_NO_SPEECH_THOLD=0.5 \
+   -e ASR_LOOP_STREAK_THOLD=10 \
+   -e ASR_BRACKET_LOOP_STREAK_THOLD=6 \
    app python -m src.sonic.export_map_data --all --asr-threads 4
 
 # disable automatic retry
