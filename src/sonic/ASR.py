@@ -112,14 +112,14 @@ def _build_whisper_runtime_env(whisper_dir: Path) -> Dict[str, str]:
     return env
 
 
-def _max_consecutive_repeat(segments: List[Dict]) -> Tuple[int, str]:
+def _max_consecutive_repeat(segments: List[Dict], key: str = "norm_text") -> Tuple[int, str]:
     max_streak = 0
     max_phrase = ""
     curr_streak = 0
     curr_phrase = ""
 
     for seg in segments:
-        phrase = seg.get("norm_text", "")
+        phrase = str(seg.get(key, "")).strip()
         if phrase and phrase == curr_phrase:
             curr_streak += 1
         else:
@@ -157,15 +157,16 @@ def _is_looping_transcript(segments: List[Dict]) -> Tuple[bool, List[str]]:
         return True, ["empty_transcript"]
 
     reasons = []
-    max_streak, streak_phrase = _max_consecutive_repeat(segments)
+    max_streak, streak_phrase = _max_consecutive_repeat(segments, key="norm_text")
     if max_streak >= DEFAULT_ASR_LOOP_STREAK_THOLD:
         reasons.append(f"long_consecutive_repeat:{max_streak}:{streak_phrase}")
 
     # Bracketed narrator/caption repeats (e.g. [This is a video of...]) are a common
     # early signal of whisper degeneration and should trigger sooner.
-    bracket_like = streak_phrase.strip().startswith("[") and streak_phrase.strip().endswith("]")
-    if bracket_like and max_streak >= DEFAULT_ASR_BRACKET_LOOP_STREAK_THOLD:
-        reasons.append(f"bracket_repeat:{max_streak}:{streak_phrase}")
+    max_streak_raw, streak_phrase_raw = _max_consecutive_repeat(segments, key="text")
+    bracket_like = streak_phrase_raw.startswith("[") and streak_phrase_raw.endswith("]")
+    if bracket_like and max_streak_raw >= DEFAULT_ASR_BRACKET_LOOP_STREAK_THOLD:
+        reasons.append(f"bracket_repeat:{max_streak_raw}:{streak_phrase_raw}")
 
     tail_count, tail_phrase, tail_ratio, tail_duration = _tail_repeat_stats(segments, tail_window_sec=900.0)
     if tail_count >= 40 and tail_ratio >= 0.65 and tail_duration >= 300.0:
