@@ -18,6 +18,12 @@ _NARRATIONS_SOURCE_PATH: Optional[Path] = None
 _NARRATIONS_SOURCE_STATS: Optional[Dict[str, object]] = None
 
 
+def _looks_like_uid(value: object) -> bool:
+    s = str(value or "")
+    # Relaxed UUID-like check for Ego4D ids.
+    return s.count("-") >= 4 and len(s) >= 30
+
+
 def _candidate_narrations_paths() -> List[Path]:
     env_override = os.getenv("NARRATIONS_JSON_PATH", "").strip()
     candidates = []
@@ -28,9 +34,32 @@ def _candidate_narrations_paths() -> List[Path]:
         [
             NARRATIONS_JSON_PATH,
             Path("/app/2026/v2/annotations/narrations.json"),
+            Path("/app/2026/v2/annotations/narration.json"),
             WORKSPACE_ROOT / "2026" / "annotations" / "narrations.json",
         ]
     )
+
+    # Also scan common annotation roots for any narration*.json file.
+    for root in (Path("/app/2026"), WORKSPACE_ROOT / "2026"):
+        if not root.exists():
+            continue
+        try:
+            for p in root.rglob("*narration*.json"):
+                if p.is_file():
+                    candidates.append(p)
+        except OSError:
+            pass
+
+    # Deduplicate while preserving order.
+    deduped: List[Path] = []
+    seen = set()
+    for c in candidates:
+        k = str(c)
+        if k in seen:
+            continue
+        seen.add(k)
+        deduped.append(c)
+    candidates = deduped
     return candidates
 
 
@@ -63,6 +92,26 @@ def _index_from_payload(payload: object) -> Dict[str, object]:
         if out:
             return out
 
+        # Alternate nested list keys.
+        for list_key in ("annotations", "narrations", "clips", "records", "entries"):
+            rows = payload.get(list_key)
+            if not isinstance(rows, list):
+                continue
+            nested = _index_from_payload(rows)
+            if nested:
+                return nested
+
+        # Dict-of-dicts where each row includes its own video_uid.
+        out = {}
+        for _, v in payload.items():
+            if not isinstance(v, dict):
+                continue
+            uid = v.get("video_uid")
+            if _looks_like_uid(uid):
+                out[str(uid)] = v
+        if out:
+            return out
+
     # Alternate shape: [{"video_uid": ..., ...}, ...]
     if isinstance(payload, list):
         out = {}
@@ -70,7 +119,7 @@ def _index_from_payload(payload: object) -> Dict[str, object]:
             if not isinstance(row, dict):
                 continue
             uid = row.get("video_uid")
-            if uid:
+            if _looks_like_uid(uid):
                 out[str(uid)] = row
         return out
 
@@ -82,11 +131,16 @@ def _ensure_narrations_index() -> Dict[str, object]:
     if _NARRATIONS_INDEX is not None:
         return _NARRATIONS_INDEX
 
+    candidates = _candidate_narrations_paths()
     src = _resolve_narrations_path()
     if src is None:
         _NARRATIONS_INDEX = {}
         _NARRATIONS_SOURCE_PATH = None
-        _NARRATIONS_SOURCE_STATS = {"exists": False}
+        _NARRATIONS_SOURCE_STATS = {
+            "exists": False,
+            "candidate_count": len(candidates),
+            "checked_candidates": [str(c) for c in candidates[:20]],
+        }
         return _NARRATIONS_INDEX
 
     with open(src, "r", encoding="utf-8") as f:
@@ -102,6 +156,8 @@ def _ensure_narrations_index() -> Dict[str, object]:
         "size": st.st_size,
         "mtime": st.st_mtime,
         "indexed_videos": len(idx),
+        "sample_video_uids": list(idx.keys())[:5],
+        "candidate_count": len(candidates),
     }
     return _NARRATIONS_INDEX
 
@@ -131,6 +187,12 @@ def _extract_narration_records(entry: object) -> List[Dict]:
                 if isinstance(n, dict):
                     narrations.append(n)
 
+        # Direct narration record.
+        if not narrations and (
+            "narration_text" in entry or "text" in entry or "narration" in entry
+        ):
+            narrations.append(entry)
+
     elif isinstance(entry, list):
         for item in entry:
             if not isinstance(item, dict):
@@ -145,6 +207,8 @@ def _extract_narration_records(entry: object) -> List[Dict]:
                                 if isinstance(n, dict):
                                     narrations.append(n)
             elif "narration_text" in item:
+                narrations.append(item)
+            elif "text" in item or "narration" in item:
                 narrations.append(item)
 
     return narrations
@@ -168,12 +232,27 @@ def load_narrations_for_video(video_uid: str) -> List[Dict]:
 
     narrations = []
     for n in _extract_narration_records(entry):
-        txt = str(n.get("narration_text", "")).strip()
+        txt = str(n.get("narration_text") or n.get("text") or n.get("narration") or "").strip()
         if not txt:
             continue
+
+        ts_val = n.get("timestamp_sec")
+        if ts_val is None:
+            ts_val = n.get("timestamp")
+        if ts_val is None:
+            ts_val = n.get("time_sec")
+        if ts_val is None and n.get("timestamp_frame") is not None:
+            # Fallback assumption if only frame index exists.
+            ts_val = float(n.get("timestamp_frame", 0.0)) / 30.0
+
+        try:
+            ts_num = float(ts_val if ts_val is not None else 0.0)
+        except (TypeError, ValueError):
+            ts_num = 0.0
+
         narrations.append(
             {
-                "timestamp_sec": round(float(n.get("timestamp_sec", 0.0)), 2),
+                "timestamp_sec": round(ts_num, 2),
                 "narration_text": txt,
             }
         )

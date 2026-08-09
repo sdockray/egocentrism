@@ -26,6 +26,7 @@ WORKSPACE_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_ASR_DIR = Path("/app/2026/audio_cache/asr")
 DEFAULT_OUTPUT = WORKSPACE_ROOT / "web" / "sonic_map" / "map_data.json"
 DEFAULT_CACHE_DIR = Path("/app/2026/audio_cache/partial_map_cache")
+CACHE_SCHEMA_VERSION = 2
 
 
 def _now() -> str:
@@ -60,6 +61,7 @@ def _fingerprint_for_video(
 
     raw = "|".join(
         [
+            f"cache_schema={CACHE_SCHEMA_VERSION}",
             uid,
             str(window_sec),
             str(hop_sec),
