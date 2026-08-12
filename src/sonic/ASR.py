@@ -503,6 +503,19 @@ def run_whisper_asr(
     model_candidates = _candidate_model_paths(whisper_model)
     attempts = max_retries + 1
     last_error = None
+
+    ## Let's just try chunking first if it's enabled, to avoid wasting time on a long file that will loop anyway.
+    if DEFAULT_ASR_CHUNK_FALLBACK and DEFAULT_ASR_CHUNK_SEC > 0:
+        return _run_whisper_asr_chunked(
+            wav_path=wav_path,
+            threads=threads,
+            whisper_bin=whisper_bin,
+            whisper_dir=whisper_dir,
+            model_candidates=model_candidates,
+            max_retries=max_retries,
+            chunk_sec=DEFAULT_ASR_CHUNK_SEC,
+        )
+
     for attempt_idx in range(attempts):
         model_idx = min(attempt_idx, len(model_candidates) - 1)
         model_path = _ensure_whisper_model(model_candidates[model_idx], whisper_dir)
