@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import List, Dict
 
 WORKSPACE_ROOT = Path(__file__).resolve().parents[2]
-WEB_OUTPUT_DIR = WORKSPACE_ROOT / "web" / "sonic_map"
+WEB_OUTPUT_DIR = WORKSPACE_ROOT / "2026" / "web" / "sonic_map"
 WEB_JSON_PATH = WEB_OUTPUT_DIR / "map_data.json"
 
 from src.sonic.dataset import get_fake_shop_videos, get_video_file_path, download_missing_fake_shop_videos
